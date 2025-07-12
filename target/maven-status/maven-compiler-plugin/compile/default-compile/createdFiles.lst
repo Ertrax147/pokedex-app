@@ -1,0 +1,7 @@
+com\pokedex\app\repository\PokemonRepository.class
+com\pokedex\app\model\Pokemon.class
+com\pokedex\app\controller\PokemonWebController.class
+com\pokedex\app\service\PokemonService.class
+com\pokedex\app\config\DataLoader.class
+com\pokedex\app\PokedexApplication.class
+com\pokedex\app\controller\PokemonRestController.class
