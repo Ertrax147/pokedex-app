@@ -59,6 +59,10 @@ public class Pokemon {
     @Max(value = 255, message = "La defensa especial no puede exceder 255")
     private Integer specialDefense;
     
+
+
+
+    
     @Min(value = 1, message = "La velocidad debe ser mayor a 0")
     @Max(value = 255, message = "La velocidad no puede exceder 255")
     private Integer speed;
