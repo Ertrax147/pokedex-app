@@ -50,6 +50,9 @@ public interface PokemonRepository extends JpaRepository<Pokemon, Long> {
     // Verificar si existe un Pokémon por nombre
     boolean existsByNameIgnoreCase(String name);
     
+
+
+    
     // Verificar si existe un Pokémon por número de Pokédex
     boolean existsByPokedexNumber(Integer pokedexNumber);
 } 
