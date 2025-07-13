@@ -330,14 +330,14 @@
                                               th:text="${evolution.secondaryType}">Tipo Secundario</span>
                                     </div>
                                     <!-- Información de evolución -->
-                                    <div class="evolution-info" th:if="${evolution.evolutionLevel != null}">
+                                    <div class="evolution-info" th:if="${evolution.evolutionLevel != null and evolution.previousEvolutionPokedexNumber != null}">
                                         <small class="text-muted">
                                             <i class="fas fa-level-up-alt me-1"></i>
                                             <span th:text="'Nivel ' + ${evolution.evolutionLevel}">Nivel 16</span>
                                         </small>
                                     </div>
                                     <!-- Método de evolución -->
-                                    <div class="evolution-method" th:if="${evolution.evolutionMethod != null and evolution.evolutionMethod != 'none'}">
+                                    <div class="evolution-method" th:if="${evolution.evolutionMethod != null and evolution.evolutionMethod != 'none' and evolution.previousEvolutionPokedexNumber != null}">
                                         <small class="text-info">
                                             <i class="fas fa-magic me-1" th:if="${evolution.evolutionMethod == 'level'}"></i>
                                             <i class="fas fa-gem me-1" th:if="${evolution.evolutionMethod == 'thunderstone'}"></i>

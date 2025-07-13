@@ -5,6 +5,11 @@ import com.pokedex.app.service.PokemonService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.http.ResponseEntity;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import java.util.List;
 
 @Component
 public class DataLoader implements CommandLineRunner {
@@ -14,146 +19,251 @@ public class DataLoader implements CommandLineRunner {
     
     @Override
     public void run(String... args) throws Exception {
-        loadInitialPokemon();
+        if (pokemonService.countPokemon() == 0) {
+            loadFromPokeApiGeneration1();
+            updateEvolutionData(new RestTemplate());
+        }
     }
     
-    private void loadInitialPokemon() {
-        // Borrar todos los Pokémon existentes
-        pokemonService.deleteAllPokemon();
-        // Pokémon iniciales de la primera generación
-        createPokemon("Bulbasaur", 1, "Planta", "Veneno",
-            "Un extraño semilla fue plantada en su espalda al nacer. La planta y el Pokémon crecen juntos.",
-            0.7, 6.9, 45, 49, 49, 65, 65, 45,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/1.png",
-            "Bulbasaur → Ivysaur → Venusaur",
-            null, 16, "level", null, 2);
+    private void loadFromPokeApiGeneration1() {
+        RestTemplate restTemplate = new RestTemplate();
+        String gen1Url = "https://pokeapi.co/api/v2/generation/1/";
+        ResponseEntity<Map> response = restTemplate.getForEntity(gen1Url, Map.class);
+        List<LinkedHashMap<String, String>> species = (List<LinkedHashMap<String, String>>) response.getBody().get("pokemon_species");
+        species.sort((a, b) -> {
+            // Ordenar por número de pokédex (url termina en /{id}/)
+            int idA = Integer.parseInt(a.get("url").replaceAll(".*/([0-9]+)/", "$1"));
+            int idB = Integer.parseInt(b.get("url").replaceAll(".*/([0-9]+)/", "$1"));
+            return Integer.compare(idA, idB);
+        });
+        int count = 0;
+        for (LinkedHashMap<String, String> specie : species) {
+            if (++count > 151) break;
+            String pokeUrl = specie.get("url").replace("pokemon-species", "pokemon");
+            // pokeUrl ejemplo: https://pokeapi.co/api/v2/pokemon/1/
+            try {
+                Map pokeData = restTemplate.getForObject(pokeUrl, Map.class);
+                String name = (String) pokeData.get("name");
+                Integer pokedexNumber = (Integer) pokeData.get("id");
+                List<Map> typesList = (List<Map>) pokeData.get("types");
+                String type = typesList.size() > 0 ? (String) ((Map) ((Map) typesList.get(0)).get("type")).get("name") : "";
+                String secondaryType = typesList.size() > 1 ? (String) ((Map) ((Map) typesList.get(1)).get("type")).get("name") : null;
+                String description = "";
+                Double height = ((Integer) pokeData.get("height")) / 10.0;
+                Double weight = ((Integer) pokeData.get("weight")) / 10.0;
+                Integer hp = null, attack = null, defense = null, specialAttack = null, specialDefense = null, speed = null;
+                List<Map> stats = (List<Map>) pokeData.get("stats");
+                for (Map stat : stats) {
+                    String statName = (String) ((Map)stat.get("stat")).get("name");
+                    Integer baseStat = (Integer) stat.get("base_stat");
+                    switch (statName) {
+                        case "hp": hp = baseStat; break;
+                        case "attack": attack = baseStat; break;
+                        case "defense": defense = baseStat; break;
+                        case "special-attack": specialAttack = baseStat; break;
+                        case "special-defense": specialDefense = baseStat; break;
+                        case "speed": speed = baseStat; break;
+                    }
+                }
+                String imageUrl = ((Map)((Map)pokeData.get("sprites")).get("other")).get("official-artwork") != null ?
+                    (String) ((Map)((Map)((Map)pokeData.get("sprites")).get("other")).get("official-artwork")).get("front_default") : null;
+                if (imageUrl == null) imageUrl = (String) ((Map)pokeData.get("sprites")).get("front_default");
+                // Cargar descripción desde species endpoint
+                Map speciesData = restTemplate.getForObject(specie.get("url"), Map.class);
+                List<Map> flavorTextEntries = (List<Map>) speciesData.get("flavor_text_entries");
+                for (Map entry : flavorTextEntries) {
+                    if ("es".equals(((Map)entry.get("language")).get("name"))) {
+                        description = ((String) entry.get("flavor_text")).replaceAll("\n|\f", " ");
+                        break;
+                    }
+                }
+                // Guardar Pokémon
+                Pokemon pokemon = new Pokemon();
+                pokemon.setName(capitalize(name));
+                pokemon.setPokedexNumber(pokedexNumber);
+                pokemon.setType(capitalize(type));
+                pokemon.setSecondaryType(secondaryType != null ? capitalize(secondaryType) : null);
+                pokemon.setDescription(description);
+                pokemon.setHeight(height);
+                pokemon.setWeight(weight);
+                pokemon.setHp(hp);
+                pokemon.setAttack(attack);
+                pokemon.setDefense(defense);
+                pokemon.setSpecialAttack(specialAttack);
+                pokemon.setSpecialDefense(specialDefense);
+                pokemon.setSpeed(speed);
+                pokemon.setImageUrl(imageUrl);
+                // Cargar información de evolución desde species endpoint
+                try {
+                    Map evolutionChainMap = (Map) speciesData.get("evolution_chain");
+                    String evolutionChainUrl = (String) evolutionChainMap.get("url");
+                    if (evolutionChainUrl != null) {
+                        Map evolutionChainData = restTemplate.getForObject(evolutionChainUrl, Map.class);
+                        Map chain = (Map) evolutionChainData.get("chain");
+                        
+                        // Buscar este Pokémon en la cadena de evolución
+                        Map currentEvolution = findPokemonInChain(chain, pokedexNumber);
+                        if (currentEvolution != null) {
+                            // Configurar evolución previa
+                            List<Map> evolvesTo = (List<Map>) currentEvolution.get("evolves_to");
+                            if (evolvesTo != null && !evolvesTo.isEmpty()) {
+                                Map nextEvolution = evolvesTo.get(0);
+                                Map nextSpecies = (Map) nextEvolution.get("species");
+                                String nextUrl = (String) nextSpecies.get("url");
+                                Integer nextPokedexNumber = Integer.parseInt(nextUrl.replaceAll(".*/([0-9]+)/", "$1"));
+                                pokemon.setNextEvolutionPokedexNumber(nextPokedexNumber);
+                                
+                                // Configurar nivel de evolución
+                                List<Map> evolutionDetails = (List<Map>) nextEvolution.get("evolution_details");
+                                if (evolutionDetails != null && !evolutionDetails.isEmpty()) {
+                                    Map details = evolutionDetails.get(0);
+                                    if (details.get("min_level") != null) {
+                                        pokemon.setEvolutionLevel((Integer) details.get("min_level"));
+                                        pokemon.setEvolutionMethod("level");
+                                    } else if (details.get("item") != null) {
+                                        Map item = (Map) details.get("item");
+                                        String itemName = (String) item.get("name");
+                                        pokemon.setEvolutionMethod(itemName);
+                                    } else if (details.get("trigger") != null) {
+                                        Map trigger = (Map) details.get("trigger");
+                                        String triggerName = (String) trigger.get("name");
+                                        pokemon.setEvolutionMethod(triggerName);
+                                    }
+                                }
+                            }
+                            
+                            // Buscar evolución previa (más complejo, necesitamos recorrer toda la cadena)
+                            Integer prevPokedexNumber = findPreviousEvolution(chain, pokedexNumber);
+                            if (prevPokedexNumber != null) {
+                                pokemon.setPreviousEvolutionPokedexNumber(prevPokedexNumber);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    System.err.println("Error al cargar evolución para " + name + ": " + e.getMessage());
+                }
+                
+                pokemonService.savePokemon(pokemon);
+                System.out.println("Pokémon guardado: " + name + " (#" + pokedexNumber + ")");
+            } catch (Exception e) {
+                System.err.println("Error al cargar Pokémon: " + specie.get("name") + " - " + e.getMessage());
+            }
+        }
+        System.out.println("¡Pokémon de la generación 1 cargados desde PokéAPI!");
+    }
 
-        createPokemon("Ivysaur", 2, "Planta", "Veneno",
-            "Cuando el bulbo en su espalda crece, parece que no puede ponerse de pie en sus patas traseras.",
-            1.0, 13.0, 60, 62, 63, 80, 80, 60,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/2.png",
-            "Bulbasaur → Ivysaur → Venusaur",
-            16, 32, "level", 1, 3);
-
-        createPokemon("Venusaur", 3, "Planta", "Veneno",
-            "La planta florece cuando absorbe energía solar. Permanecerá en movimiento buscando la luz del sol.",
-            2.0, 100.0, 80, 82, 83, 100, 100, 80,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/3.png",
-            "Bulbasaur → Ivysaur → Venusaur",
-            32, null, "level", 2, null);
-
-        createPokemon("Charmander", 4, "Fuego", null,
-            "Prefiere las cosas calientes. Se dice que cuando llueve sale vapor de la punta de su cola.",
-            0.6, 8.5, 39, 52, 43, 60, 50, 65,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/4.png",
-            "Charmander → Charmeleon → Charizard",
-            null, 16, "level", null, 5);
-
-        createPokemon("Charmeleon", 5, "Fuego", null,
-            "Tiene una naturaleza bárbara. En batalla, lanza su cola ardiente y corta con garras afiladas.",
-            1.1, 19.0, 58, 64, 58, 80, 65, 80,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/5.png",
-            "Charmander → Charmeleon → Charizard",
-            16, 36, "level", 4, 6);
-
-        createPokemon("Charizard", 6, "Fuego", "Volador",
-            "Escupe un fuego tan caliente que funde la roca. Causa incendios forestales sin querer.",
-            1.7, 90.5, 78, 84, 78, 109, 85, 100,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/6.png",
-            "Charmander → Charmeleon → Charizard",
-            36, null, "level", 5, null);
-
-        createPokemon("Squirtle", 7, "Agua", null,
-            "Cuando retrae su largo cuello dentro de la concha, lanza un chorro de agua vigorosa.",
-            0.5, 9.0, 44, 48, 65, 50, 64, 43,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/7.png",
-            "Squirtle → Wartortle → Blastoise",
-            null, 16, "level", null, 8);
-
-        createPokemon("Wartortle", 8, "Agua", null,
-            "Se reconoce por su cola larga y peluda. Se vuelve más oscuro con la edad. Rasca a sus enemigos con sus garras afiladas.",
-            1.0, 22.5, 59, 63, 80, 65, 80, 58,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/8.png",
-            "Squirtle → Wartortle → Blastoise",
-            16, 36, "level", 7, 9);
-
-        createPokemon("Blastoise", 9, "Agua", null,
-            "Aprieta a su enemigo con su peso corporal para causar desmayos. En un pellizco, se retirará dentro de su concha.",
-            1.6, 85.5, 79, 83, 100, 85, 105, 78,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/9.png",
-            "Squirtle → Wartortle → Blastoise",
-            36, null, "level", 8, null);
-
-        createPokemon("Pikachu", 25, "Eléctrico", null,
-            "Cuando varios de estos Pokémon se juntan, su electricidad puede causar tormentas eléctricas.",
-            0.4, 6.0, 35, 55, 40, 50, 50, 90,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/25.png",
-            "Pichu → Pikachu → Raichu",
-            20, null, "friendship", 172, 26);
-
-        createPokemon("Raichu", 26, "Eléctrico", null,
-            "Su cola larga sirve como tierra para protegerse a sí mismo de su propio poder eléctrico de alto voltaje.",
-            0.8, 30.0, 60, 90, 55, 90, 80, 110,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/26.png",
-            "Pichu → Pikachu → Raichu",
-            null, null, "thunderstone", 25, null);
-
-        createPokemon("Pichu", 172, "Eléctrico", null,
-            "Es pequeño y aún no puede almacenar mucha electricidad. Cada vez que se asusta, descarga electricidad.",
-            0.3, 2.0, 20, 40, 15, 35, 35, 60,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/172.png",
-            "Pichu → Pikachu → Raichu",
-            null, 20, "friendship", null, 25);
-
-        createPokemon("Mewtwo", 150, "Psíquico", null,
-            "Su ADN es casi el mismo que el de Mew. Sin embargo, su tamaño y disposición son muy diferentes.",
-            2.0, 122.0, 106, 110, 90, 154, 90, 130,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/150.png",
-            "Mewtwo",
-            null, null, "none", null, null);
-
-        createPokemon("Mew", 151, "Psíquico", null,
-            "Tan raro que se dice que es un Pokémon legendario. Solo unos pocos han visto este Pokémon.",
-            0.4, 4.0, 100, 100, 100, 100, 100, 100,
-            "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/151.png",
-            "Mew",
-            null, null, "none", null, null);
+    private String capitalize(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return s.substring(0, 1).toUpperCase() + s.substring(1);
+    }
+    
+    private Map findPokemonInChain(Map chain, Integer pokedexNumber) {
+        Map species = (Map) chain.get("species");
+        String url = (String) species.get("url");
+        Integer chainPokedexNumber = Integer.parseInt(url.replaceAll(".*/([0-9]+)/", "$1"));
         
-        System.out.println("¡Datos iniciales de Pokémon cargados exitosamente!");
+        if (chainPokedexNumber.equals(pokedexNumber)) {
+            return chain;
+        }
+        
+        List<Map> evolvesTo = (List<Map>) chain.get("evolves_to");
+        if (evolvesTo != null) {
+            for (Map evolution : evolvesTo) {
+                Map result = findPokemonInChain(evolution, pokedexNumber);
+                if (result != null) {
+                    return result;
+                }
+            }
+        }
+        
+        return null;
     }
     
-    private void createPokemon(String name, Integer pokedexNumber, String type, String secondaryType,
-                              String description, Double height, Double weight,
-                              Integer hp, Integer attack, Integer defense,
-                              Integer specialAttack, Integer specialDefense, Integer speed,
-                              String imageUrl, String evolutionChain,
-                              Integer evolutionLevel, Integer maxLevel, String method,
-                              Integer previousEvolutionPokedexNumber, Integer nextEvolutionPokedexNumber) {
-        try {
-            Pokemon pokemon = new Pokemon();
-            pokemon.setName(name);
-            pokemon.setPokedexNumber(pokedexNumber);
-            pokemon.setType(type);
-            pokemon.setSecondaryType(secondaryType);
-            pokemon.setDescription(description);
-            pokemon.setHeight(height);
-            pokemon.setWeight(weight);
-            pokemon.setHp(hp);
-            pokemon.setAttack(attack);
-            pokemon.setDefense(defense);
-            pokemon.setSpecialAttack(specialAttack);
-            pokemon.setSpecialDefense(specialDefense);
-            pokemon.setSpeed(speed);
-            pokemon.setImageUrl(imageUrl);
-            pokemon.setEvolutionChain(evolutionChain);
-            pokemon.setEvolutionLevel(evolutionLevel);
-            pokemon.setEvolutionMethod(method);
-            pokemon.setPreviousEvolutionPokedexNumber(previousEvolutionPokedexNumber);
-            pokemon.setNextEvolutionPokedexNumber(nextEvolutionPokedexNumber);
-            
-            pokemonService.savePokemon(pokemon);
-        } catch (Exception e) {
-            System.err.println("Error al crear Pokémon " + name + ": " + e.getMessage());
+    private Integer findPreviousEvolution(Map chain, Integer targetPokedexNumber) {
+        List<Map> evolvesTo = (List<Map>) chain.get("evolves_to");
+        if (evolvesTo != null) {
+            for (Map evolution : evolvesTo) {
+                Map species = (Map) evolution.get("species");
+                String url = (String) species.get("url");
+                Integer evolutionPokedexNumber = Integer.parseInt(url.replaceAll(".*/([0-9]+)/", "$1"));
+                
+                if (evolutionPokedexNumber.equals(targetPokedexNumber)) {
+                    // Encontramos el Pokémon objetivo, su predecesor es el actual
+                    Map currentSpecies = (Map) chain.get("species");
+                    String currentUrl = (String) currentSpecies.get("url");
+                    return Integer.parseInt(currentUrl.replaceAll(".*/([0-9]+)/", "$1"));
+                }
+                
+                // Buscar recursivamente en las evoluciones de este Pokémon
+                Integer result = findPreviousEvolution(evolution, targetPokedexNumber);
+                if (result != null) {
+                    return result;
+                }
+            }
+        }
+        
+        return null;
+    }
+
+    // Después de crear y guardar todos los Pokémon, recorro la cadena evolutiva y actualizo los campos de evolución en el Pokémon de destino
+    private void updateEvolutionData(RestTemplate restTemplate) {
+        String gen1Url = "https://pokeapi.co/api/v2/generation/1/";
+        ResponseEntity<Map> response = restTemplate.getForEntity(gen1Url, Map.class);
+        List<LinkedHashMap<String, String>> species = (List<LinkedHashMap<String, String>>) response.getBody().get("pokemon_species");
+        for (LinkedHashMap<String, String> specie : species) {
+            Map speciesData = restTemplate.getForObject(specie.get("url"), Map.class);
+            Map evolutionChainMap = (Map) speciesData.get("evolution_chain");
+            String evolutionChainUrl = (String) evolutionChainMap.get("url");
+            if (evolutionChainUrl != null) {
+                Map evolutionChainData = restTemplate.getForObject(evolutionChainUrl, Map.class);
+                Map chain = (Map) evolutionChainData.get("chain");
+                processEvolutionChain(chain, null, null, null);
+            }
+        }
+    }
+
+    // Recursivo: actualiza los campos de evolución en el Pokémon de destino
+    private void processEvolutionChain(Map chain, Integer prevPokedexNumber, Integer evolutionLevel, String evolutionMethod) {
+        Map species = (Map) chain.get("species");
+        String url = (String) species.get("url");
+        Integer pokedexNumber = Integer.parseInt(url.replaceAll(".*/([0-9]+)/", "$1"));
+        if (prevPokedexNumber != null) {
+            // Actualiza el Pokémon de destino (el que evoluciona)
+            Pokemon pokemon = pokemonService.getPokemonByPokedexNumber(pokedexNumber).orElse(null);
+            if (pokemon != null) {
+                pokemon.setPreviousEvolutionPokedexNumber(prevPokedexNumber);
+                pokemon.setEvolutionLevel(evolutionLevel);
+                pokemon.setEvolutionMethod(evolutionMethod);
+                pokemonService.savePokemon(pokemon);
+            }
+            // También actualiza el Pokémon de origen con el campo nextEvolution
+            Pokemon prevPokemon = pokemonService.getPokemonByPokedexNumber(prevPokedexNumber).orElse(null);
+            if (prevPokemon != null) {
+                prevPokemon.setNextEvolutionPokedexNumber(pokedexNumber);
+                pokemonService.savePokemon(prevPokemon);
+            }
+        }
+        List<Map> evolvesTo = (List<Map>) chain.get("evolves_to");
+        if (evolvesTo != null) {
+            for (Map evolution : evolvesTo) {
+                List<Map> evolutionDetails = (List<Map>) evolution.get("evolution_details");
+                Integer nextLevel = null;
+                String nextMethod = null;
+                if (evolutionDetails != null && !evolutionDetails.isEmpty()) {
+                    Map details = evolutionDetails.get(0);
+                    if (details.get("min_level") != null) {
+                        nextLevel = (Integer) details.get("min_level");
+                        nextMethod = "level";
+                    } else if (details.get("item") != null) {
+                        Map item = (Map) details.get("item");
+                        nextMethod = (String) item.get("name");
+                    } else if (details.get("trigger") != null) {
+                        Map trigger = (Map) details.get("trigger");
+                        nextMethod = (String) trigger.get("name");
+                    }
+                }
+                processEvolutionChain(evolution, pokedexNumber, nextLevel, nextMethod);
+            }
         }
     }
 } 
