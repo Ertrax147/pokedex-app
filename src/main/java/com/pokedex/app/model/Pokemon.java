@@ -1,6 +1,7 @@
 package com.pokedex.app.model;
 
 import jakarta.persistence.*;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Min;
@@ -32,10 +33,10 @@ public class Pokemon {
     @Column(length = 1000)
     private String description;
     
-    @Min(value = 1, message = "La altura debe ser mayor a 0")
+    @DecimalMin(value = "0.1", message = "La altura debe ser un valor positivo")
     private Double height;
-    
-    @Min(value = 1, message = "El peso debe ser mayor a 0")
+
+    @DecimalMin(value = "0.1", message = "El peso debe ser un valor positivo")
     private Double weight;
     
     @Min(value = 1, message = "Los HP deben ser mayor a 0")

@@ -156,37 +156,44 @@ public class PokemonService {
         return Optional.empty();
     }
     
+
+    // Archivo: src/main/java/com/pokedex/app/service/PokemonService.java
+
     public List<Pokemon> getEvolutionChain(Long pokemonId) {
         List<Pokemon> evolutionChain = new ArrayList<>();
         
-        // Buscar la evolución base (la primera de la cadena)
-        Optional<Pokemon> currentPokemon = pokemonRepository.findById(pokemonId);
-        if (currentPokemon.isPresent()) {
-            Pokemon pokemon = currentPokemon.get();
-            
-            // Buscar hacia atrás hasta encontrar la evolución base
-            while (pokemon.getPreviousEvolutionPokedexNumber() != null) {
-                Optional<Pokemon> previous = pokemonRepository.findByPokedexNumber(pokemon.getPreviousEvolutionPokedexNumber());
-                if (previous.isPresent()) {
-                    pokemon = previous.get();
-                } else {
-                    break;
-                }
-            }
-            
-            // Ahora agregar todas las evoluciones en orden
-            evolutionChain.add(pokemon);
-            while (pokemon.getNextEvolutionPokedexNumber() != null) {
-                Optional<Pokemon> next = pokemonRepository.findByPokedexNumber(pokemon.getNextEvolutionPokedexNumber());
-                if (next.isPresent()) {
-                    pokemon = next.get();
-                    evolutionChain.add(pokemon);
-                } else {
-                    break;
-                }
+        // 1. Obtener el Pokémon actual que se está viendo
+        Optional<Pokemon> currentPokemonOptional = pokemonRepository.findById(pokemonId);
+        if (!currentPokemonOptional.isPresent()) {
+            return evolutionChain; // Devuelve una lista vacía si el Pokémon no existe
+        }
+
+        Pokemon pokemonToTrace = currentPokemonOptional.get();
+
+        // 2. Encontrar la forma base de la evolución retrocediendo en la cadena
+        while (pokemonToTrace.getPreviousEvolutionPokedexNumber() != null) {
+            Optional<Pokemon> previousForm = pokemonRepository.findByPokedexNumber(pokemonToTrace.getPreviousEvolutionPokedexNumber());
+            if (previousForm.isPresent()) {
+                pokemonToTrace = previousForm.get();
+            } else {
+                // Si la cadena está rota (datos inconsistentes), detenemos la búsqueda
+                break; 
             }
         }
-        
+
+        // 3. Construir la cadena completa hacia adelante desde la forma base
+        while (pokemonToTrace != null) {
+            evolutionChain.add(pokemonToTrace); // Añadir la evolución actual a la lista
+            
+            if (pokemonToTrace.getNextEvolutionPokedexNumber() != null) {
+                // Buscar la siguiente evolución por su número de Pokédex
+                Optional<Pokemon> nextForm = pokemonRepository.findByPokedexNumber(pokemonToTrace.getNextEvolutionPokedexNumber());
+                pokemonToTrace = nextForm.orElse(null); // Actualizar al siguiente o terminar si no se encuentra
+            } else {
+                pokemonToTrace = null; // Terminar el bucle si no hay más evoluciones
+            }
+        }
+
         return evolutionChain;
     }
     
